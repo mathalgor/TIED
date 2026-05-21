@@ -26,15 +26,18 @@ import torch.nn.functional as F
 
 from tied.config import load_config
 from tied.dataset import IMAGE_EXTS, _read_source
-from tied.model import TED
+from tied.model import MODELS
 
 
-def _load_checkpoint(path: Path, device: str) -> tuple[TED, dict]:
+def _load_checkpoint(path: Path, device: str):
     ckpt = torch.load(path, map_location=device, weights_only=False)
     if not isinstance(ckpt, dict) or "model" not in ckpt:
         raise RuntimeError(f"unexpected checkpoint format: {path}")
     in_ch = int(ckpt.get("in_channels", 3))
-    model = TED(in_channels=in_ch).to(device)
+    model_kind = str(ckpt.get("model_kind", "ted"))
+    if model_kind not in MODELS:
+        raise RuntimeError(f"unknown model_kind in checkpoint: {model_kind!r}")
+    model = MODELS[model_kind](in_channels=in_ch).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()
     return model, ckpt
@@ -60,6 +63,7 @@ def main() -> int:
     model, ckpt = _load_checkpoint(args.ckpt, args.device)
     source_mode = str(ckpt.get("source", cfg.source))
     outline_mode = str(ckpt.get("outline", cfg.outline))
+    model_kind = str(ckpt.get("model_kind", "ted"))
 
     input_dir = args.input
     if not input_dir.is_dir():
@@ -73,7 +77,7 @@ def main() -> int:
         print(f"no images in {input_dir}", file=sys.stderr)
         return 1
 
-    print(f"ckpt={args.ckpt}  source={source_mode}  "
+    print(f"ckpt={args.ckpt}  model={model_kind}  source={source_mode}  "
           f"trained_outline={outline_mode}  files={len(files)}  "
           f"device={args.device}  (output: inverted grayscale)")
     t0 = time.perf_counter()
@@ -82,7 +86,7 @@ def main() -> int:
         h, w = img.shape[:2]
         x = torch.from_numpy(img).permute(2, 0, 1).float().unsqueeze(0) / 255.0
         x = x.to(args.device)
-        x_in = TED.resize_input(x)
+        x_in = model.resize_input(x)
         with torch.no_grad():
             preds = model(x_in)
         fused = preds[-1]

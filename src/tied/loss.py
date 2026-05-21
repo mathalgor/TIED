@@ -181,12 +181,29 @@ CATS_WEIGHTS = (0.01, 3.0)
 
 
 def teed_total_loss(preds: list[torch.Tensor], target: torch.Tensor,
-                    scale_weights=SCALE_WEIGHTS,
+                    scale_weights=None,
                     cats_weights=CATS_WEIGHTS,
                     radius: int = 4) -> torch.Tensor:
-    """Combined TEED loss: bdcn_loss2 on the 3 multi-scale heads + the
-    final head, plus cats_loss on the fused output."""
-    assert len(preds) == 4
+    """Combined TEED loss: bdcn_loss2 on every head plus cats_loss on
+    the fused output.
+
+    ``scale_weights`` length must match ``len(preds)``. Default uses
+    TEED's original (1.1, 0.7, 1.1, 1.3) for 4-head models (TED,
+    TEDup); for any other count (e.g. TEDdeep's 5 heads) falls back
+    to uniform 1.0.
+    """
+    if scale_weights is None:
+        if len(preds) == 4:
+            scale_weights = SCALE_WEIGHTS              # (1.1, 0.7, 1.1, 1.3)
+        elif len(preds) == 5:
+            # Prepend a weight for the new shallowest head, keep TEED's
+            # pattern for the rest — fused head must stay at 1.3 so the
+            # output we actually use at inference gets prioritised.
+            scale_weights = (1.0,) + SCALE_WEIGHTS     # (1.0, 1.1, 0.7, 1.1, 1.3)
+        else:
+            scale_weights = tuple(1.0 for _ in preds)
+    assert len(preds) == len(scale_weights), \
+        f"preds={len(preds)} scale_weights={len(scale_weights)}"
     loss1 = sum(bdcn_loss2(p, target, w) for p, w in zip(preds, scale_weights))
     loss2 = cats_loss(preds[-1], target, cats_weights, radius=radius)
     return loss1 + loss2

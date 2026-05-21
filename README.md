@@ -115,6 +115,7 @@ Useful options:
 | `--tolerance`  | (from toml)| spatial tolerance in pixels. `teed`: radius of the `cats_loss` bdr/texture neighbourhood. `soft_bce`: target is max-pooled by 2r+1 before BCE — predictions within `r` px of a true edge are not punished as FPs (lines get up to `r` px thicker). `soft_jaccard`: ignored. |
 | `--loss`       | `auto`     | `auto`, `teed`, `soft_jaccard`, `soft_bce`. See the table above. |
 | `--hard-threshold` | 0.5    | binarisation threshold for the hard metric. Lower (e.g. 0.2) when using a tonal loss whose edge predictions sit well below 0.5. |
+| `--model`      | `ted`      | `ted` (~60k params, default), `tedup` (~180k, wider + deeper dense block), `teddeep` (adds a 4th encoder stage, doubles the receptive field; returns 5 heads). Saved as `model_kind` in the checkpoint, so `tied-infer` reconstructs the right class automatically. |
 | `--best-metric`| `auto`     | `loss`, `hard`, or `auto` (= `hard` when outline=mono, `loss` when outline=gray). `hard` = MCED-style wrong/union after binarising sigmoid(pred) and target at 0.5 |
 | `--rollback-on-plateau` | off | reload the in-memory best snapshot on a plateau, re-init Adam, bump RNG seed, retry |
 | `--initial-patience` | 4 | (rollback) epochs without improvement before the first rollback; grows along 4,6,8,12,16,24,32,48,… on every failed rollback |
@@ -224,11 +225,13 @@ tied-infer --ckpt ckpt/best.pt --input "$ROOT/test/source" --out-dir outlines
 
 ## 6. Notes & roadmap
 
-- The model is currently TEED's TED net with a configurable input
-  channel count (3 for RGB sources, 1 for grayscale). The 1-channel
-  variant is selected automatically when `[dataset].source = "gray"`.
-- Loss carries TEED's tolerance band via `cats_loss(radius=...)`, so
-  off-by-one predictions near true edges are not punished.
-- Planned: a deeper, MCED-style model variant exposed via a
-  `tied-train --model deep` flag (similar to MCED's `teed` / `teedup`
-  switch), for cases where the small TED net saturates.
+- Three model variants are available, picked with `tied-train --model`:
+  `ted` (~60k, default), `tedup` (~180k, wider + deeper dense block),
+  `teddeep` (adds a 4th encoder stage at stride 8, doubles the
+  receptive field, returns 5 heads). All accept the configured
+  `in_channels` (3 for `source=rgb`, 1 for `source=gray`). The chosen
+  variant is recorded in the checkpoint, so `tied-infer` reconstructs
+  the correct class without any flag.
+- TEED loss (`bdcn_loss2 + cats_loss`) auto-adapts its per-head weights
+  to the head count: TEED-original `(1.1, 0.7, 1.1, 1.3)` for 4-head
+  models, uniform `1.0` for `teddeep`'s 5.

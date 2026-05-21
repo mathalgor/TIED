@@ -32,7 +32,7 @@ from torch.utils.data import DataLoader
 from tied.config import load_config
 from tied.dataset import TiedDataset
 from tied.loss import LOSS_KINDS, compute_loss, hard_pixel_counts, resolve_loss
-from tied.model import TED, count_parameters
+from tied.model import MODELS, count_parameters
 
 
 def _next_patience(p: int) -> int:
@@ -44,7 +44,7 @@ def _next_patience(p: int) -> int:
     return int(round(p * 1.5)) if is_pot else int(round(p * 4 / 3))
 
 
-def _epoch(model: TED, loader: DataLoader, device: str,
+def _epoch(model, loader: DataLoader, device: str,
            opt: torch.optim.Optimizer | None,
            radius: int, loss_kind: str,
            hard_threshold: float = 0.5) -> dict:
@@ -108,6 +108,11 @@ def main() -> int:
     ap.add_argument("--save-every", type=int, default=5)
     ap.add_argument("--resume", type=Path, default=None,
                     help="continue training from a .pt checkpoint")
+    ap.add_argument("--model", choices=list(MODELS), default="ted",
+                    help="model variant. 'ted' (~60k, default), 'tedup' "
+                         "(~180k, wider+deeper dense), 'teddeep' "
+                         "(adds a 4th encoder stage, doubles the "
+                         "receptive field; returns 5 heads instead of 4)")
     ap.add_argument("--hard-threshold", type=float, default=0.5,
                     help="binarisation threshold for the hard metric "
                          "(default 0.5). Lower it (e.g. 0.2) for tonal "
@@ -215,9 +220,11 @@ def main() -> int:
         num_workers=args.num_workers,
         pin_memory=(args.device == "cuda")) if test_ds is not None else None
 
-    model = TED(in_channels=cfg.in_channels).to(args.device)
+    model_cls = MODELS[args.model]
+    model = model_cls(in_channels=cfg.in_channels).to(args.device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
-    print(f"model: TED in_ch={cfg.in_channels}  "
+    print(f"model: {args.model} ({model_cls.__name__}) "
+          f"in_ch={cfg.in_channels}  "
           f"params={count_parameters(model):,}  device={args.device}  "
           f"lr={args.lr}  tolerance={tolerance}  "
           f"best_metric={best_metric_name}  loss={loss_kind}")
@@ -320,6 +327,7 @@ def main() -> int:
                     "source": cfg.source,
                     "outline": cfg.outline,
                     "in_channels": cfg.in_channels,
+                    "model_kind": args.model,
                     "loss_kind": loss_kind,
                     "args": vars(args),
                 }, args.out_dir / "best.pt")
@@ -352,6 +360,7 @@ def main() -> int:
                     "source": cfg.source,
                     "outline": cfg.outline,
                     "in_channels": cfg.in_channels,
+                    "model_kind": args.model,
                     "loss_kind": loss_kind,
                     "args": vars(args),
                 }, args.out_dir / "last.pt")
@@ -389,6 +398,7 @@ def main() -> int:
             "source": cfg.source,
             "outline": cfg.outline,
             "in_channels": cfg.in_channels,
+            "model_kind": args.model,
             "loss_kind": loss_kind,
             "args": vars(args),
         }, args.out_dir / "last.pt")
