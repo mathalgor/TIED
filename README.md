@@ -172,6 +172,11 @@ configured test split, pass it explicitly:
 tied-infer --ckpt ckpt/best.pt --input "$ROOT/test/source" --out-dir outlines
 ```
 
+Output is **inverted grayscale** — dark edges on a white background —
+for both `outline=mono` and `outline=gray` checkpoints. No thresholding
+is applied even for mono-trained models, so the raw confidence map is
+visible and the two training modes are visually comparable.
+
 Options:
 
 | flag | default | meaning |
@@ -179,8 +184,6 @@ Options:
 | `--ckpt`      | (required)  | path to a `.pt` checkpoint |
 | `--input`     | (required)  | folder of images to run on |
 | `--out-dir`   | (required)  | where to write outline PNGs |
-| `--mode`      | `auto`      | `mono` (threshold), `gray` (sigmoid×255), or `auto` (use checkpoint's outline mode) |
-| `--threshold` | 0.5         | (`mono`) sigmoid threshold |
 | `--device`    | auto        | `cuda` or `cpu` |
 
 ## 5. Typical workflow

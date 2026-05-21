@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 """Run a trained TIED checkpoint on a folder of images.
 
-Reads source channels and outline encoding from ``tied.toml``. The
-input folder is mandatory — pass it via ``--input``. Output PNGs are
-written into ``--out-dir``.
+Reads source channels from ``tied.toml`` / the checkpoint. The input
+folder is mandatory — pass it via ``--input``. Output PNGs are written
+into ``--out-dir``, sized to match each input.
 
-Outputs PNGs sized to match the input (after resize-to-multiple-of-8
-inside the model). Output is bright-on-dark, matching the TIED outline
-convention:
-  * ``--mode mono``  — threshold the sigmoid at ``--threshold`` (default
-    0.5), write 0/255.
-  * ``--mode gray``  — write the sigmoid scaled to [0, 255].
-  * ``--mode auto``  — pick from the checkpoint's outline mode.
+The output is **inverted grayscale** (dark edges on a white background)
+for both outline modes, regardless of how the model was trained. This
+matches the convention of edge maps you would inspect on screen and
+makes mono vs gray checkpoints visually comparable. No thresholding is
+applied — write `1 - sigmoid(pred)` scaled to [0, 255].
 """
 
 from __future__ import annotations
@@ -52,11 +50,6 @@ def main() -> int:
                     help="where to write outline PNGs")
     ap.add_argument("--device",
                     default="cuda" if torch.cuda.is_available() else "cpu")
-    ap.add_argument("--mode", choices=["auto", "mono", "gray"],
-                    default="auto",
-                    help="output encoding (default: from checkpoint)")
-    ap.add_argument("--threshold", type=float, default=0.5,
-                    help="(mono) sigmoid threshold (default 0.5)")
     args = ap.parse_args()
 
     cfg = load_config()
@@ -67,7 +60,6 @@ def main() -> int:
     model, ckpt = _load_checkpoint(args.ckpt, args.device)
     source_mode = str(ckpt.get("source", cfg.source))
     outline_mode = str(ckpt.get("outline", cfg.outline))
-    mode = outline_mode if args.mode == "auto" else args.mode
 
     input_dir = args.input
     if not input_dir.is_dir():
@@ -81,8 +73,9 @@ def main() -> int:
         print(f"no images in {input_dir}", file=sys.stderr)
         return 1
 
-    print(f"ckpt={args.ckpt}  source={source_mode}  outline-mode={mode}  "
-          f"files={len(files)}  device={args.device}")
+    print(f"ckpt={args.ckpt}  source={source_mode}  "
+          f"trained_outline={outline_mode}  files={len(files)}  "
+          f"device={args.device}  (output: inverted grayscale)")
     t0 = time.perf_counter()
     for i, p in enumerate(files, 1):
         img = _read_source(p, source_mode)              # (H, W, C) uint8
@@ -97,10 +90,9 @@ def main() -> int:
             fused = F.interpolate(fused, size=(h, w),
                                   mode="bicubic", align_corners=False)
         prob = torch.sigmoid(fused).squeeze().cpu().numpy()
-        if mode == "mono":
-            out = ((prob >= args.threshold).astype(np.uint8)) * 255
-        else:
-            out = np.clip(prob * 255.0, 0, 255).astype(np.uint8)
+        # Invert so edges are dark on a white background — easier to
+        # inspect and identical for mono- and gray-trained checkpoints.
+        out = np.clip((1.0 - prob) * 255.0, 0, 255).astype(np.uint8)
         out_path = args.out_dir / f"{p.stem}.png"
         cv2.imwrite(str(out_path), out, [cv2.IMWRITE_PNG_COMPRESSION, 7])
         print(f"[{i}/{len(files)}] {p.name} -> {out_path.name}", flush=True)
