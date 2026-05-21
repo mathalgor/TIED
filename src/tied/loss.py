@@ -83,6 +83,24 @@ def cats_loss(logits: torch.Tensor, targets: torch.Tensor,
     return cost + bdr_factor * bdr + tex_factor * tex
 
 
+@torch.no_grad()
+def hard_pixel_counts(logits: torch.Tensor, targets: torch.Tensor,
+                      threshold: float = 0.5) -> dict:
+    """Binarise sigmoid(logits) and targets at ``threshold``, then count
+    wrong pixels and union pixels — same shape as MCED's hard_pixel_counts.
+
+    For outline="mono" targets are already in {0., 1.} so the threshold
+    is irrelevant on that side. For outline="gray" we threshold both
+    sides at 0.5 which gives a coarse but consistent IoU-style signal.
+    """
+    pred_b = (torch.sigmoid(logits) >= threshold)
+    targ_b = (targets >= threshold)
+    wrong = (pred_b != targ_b).sum().item()
+    union = (pred_b | targ_b).sum().item()
+    total = int(targ_b.numel())
+    return {"wrong_px": int(wrong), "union_px": int(union), "total_px": total}
+
+
 SCALE_WEIGHTS = (1.1, 0.7, 1.1, 1.3)
 CATS_WEIGHTS = (0.01, 3.0)
 

@@ -112,6 +112,7 @@ Useful options:
 | `--crop-size`  | 352        | random crop size; `0` disables (full image, batch=1) |
 | `--splits`     | real aug   | which `train/source/<split>` folders to use |
 | `--tolerance`  | (from toml)| override `[loss].tolerance` for this run |
+| `--best-metric`| `auto`     | `loss`, `hard`, or `auto` (= `hard` when outline=mono, `loss` when outline=gray). `hard` = MCED-style wrong/union after binarising sigmoid(pred) and target at 0.5 |
 | `--device`     | auto       | `cuda` if available, else `cpu` |
 | `--num-workers`| 4          | DataLoader workers |
 | `--save-every` | 5          | overwrite `last.pt` every N epochs |
@@ -121,6 +122,14 @@ Useful options:
 Loss: TEED's combined `bdcn_loss2` (on the 3 multi-scale heads + the
 fused head) plus `cats_loss` (with the configured `tolerance` radius)
 on the final fused output.
+
+Per-epoch log line shows both `loss` and `hard` for train and (if
+available) test, with a trailing `<` whenever the chosen `--best-metric`
+improved on that epoch:
+
+```
+ep    7/50  train loss=2.31234 hard=0.0421  test loss=2.45123 hard=0.0398  [4.2s]  <
+```
 
 Outputs in `--out-dir` (only these three files — no per-epoch
 checkpoints):

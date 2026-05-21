@@ -30,7 +30,7 @@ from torch.utils.data import DataLoader
 
 from tied.config import load_config
 from tied.dataset import TiedDataset
-from tied.loss import teed_total_loss
+from tied.loss import hard_pixel_counts, teed_total_loss
 from tied.model import TED, count_parameters
 
 
@@ -41,6 +41,7 @@ def _epoch(model: TED, loader: DataLoader, device: str,
     model.train(is_train)
     loss_sum = 0.0
     n = 0
+    n_wrong = n_union = n_total = 0
     ctx = torch.enable_grad() if is_train else torch.no_grad()
     with ctx:
         for batch in loader:
@@ -54,7 +55,18 @@ def _epoch(model: TED, loader: DataLoader, device: str,
                 opt.step()
             loss_sum += float(loss.item())
             n += 1
-    return {"loss": loss_sum / max(1, n)}
+            hc = hard_pixel_counts(preds[-1], y)
+            n_wrong += hc["wrong_px"]
+            n_union += hc["union_px"]
+            n_total += hc["total_px"]
+    hard = (n_wrong / n_union) if n_union > 0 else 0.0
+    return {
+        "loss": loss_sum / max(1, n),
+        "hard": hard,
+        "wrong_px": n_wrong,
+        "union_px": n_union,
+        "total_px": n_total,
+    }
 
 
 def main() -> int:
@@ -80,6 +92,12 @@ def main() -> int:
     ap.add_argument("--save-every", type=int, default=5)
     ap.add_argument("--resume", type=Path, default=None,
                     help="continue training from a .pt checkpoint")
+    ap.add_argument("--best-metric", choices=["auto", "loss", "hard"],
+                    default="auto",
+                    help="criterion for best.pt: 'loss' (TEED total) or "
+                         "'hard' (MCED-style wrong/union after "
+                         "binarising at 0.5). 'auto' (default): hard "
+                         "for outline=mono, loss for outline=gray.")
     args = ap.parse_args()
 
     if args.crop_size == 0 and args.batch_size != 1:
@@ -91,8 +109,12 @@ def main() -> int:
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
     cfg = load_config()
-    tolerance = tolerance if tolerance is not None else cfg.tolerance
-    tolerance = tolerance
+    tolerance = args.tolerance if args.tolerance is not None else cfg.tolerance
+    args.tolerance = tolerance
+    best_metric_name = args.best_metric
+    if best_metric_name == "auto":
+        best_metric_name = "hard" if cfg.outline == "mono" else "loss"
+    args.best_metric = best_metric_name
     train_root = cfg.root / "train"
     test_root = cfg.root / "test"
     crop = args.crop_size if args.crop_size > 0 else None
@@ -129,7 +151,8 @@ def main() -> int:
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     print(f"model: TED in_ch={cfg.in_channels}  "
           f"params={count_parameters(model):,}  device={args.device}  "
-          f"lr={args.lr}  tolerance={tolerance}")
+          f"lr={args.lr}  tolerance={tolerance}  "
+          f"best_metric={best_metric_name}")
 
     start_epoch = 1
     best_metric = float("inf")
@@ -145,9 +168,14 @@ def main() -> int:
         if isinstance(ckpt, dict):
             if "epoch" in ckpt:
                 start_epoch = int(ckpt["epoch"]) + 1
-            if "best_loss" in ckpt:
-                best_metric = float(ckpt["best_loss"])
-        print(f"resumed: {args.resume}  start_epoch={start_epoch}")
+            # Prefer a metric matching the current criterion, then any
+            # known fields (forward-compatible with older checkpoints).
+            for key in (f"best_{best_metric_name}", "best_metric", "best_loss"):
+                if key in ckpt:
+                    best_metric = float(ckpt[key])
+                    break
+        print(f"resumed: {args.resume}  start_epoch={start_epoch}  "
+              f"best_{best_metric_name}={best_metric:.6f}")
         existing_log = args.out_dir / "log.json"
         if existing_log.is_file():
             try:
@@ -166,12 +194,14 @@ def main() -> int:
             dt = time.perf_counter() - t0
 
             ref = ev if ev is not None else tr
-            improved = ref["loss"] < best_metric
+            current = ref[best_metric_name]
+            improved = current < best_metric
 
             line = (f"ep {epoch:4d}/{start_epoch + args.epochs - 1}  "
-                    f"train loss={tr['loss']:.5f}")
+                    f"train loss={tr['loss']:.5f} hard={tr['hard']:.4f}")
             if ev is not None:
-                line += f"  test loss={ev['loss']:.5f}"
+                line += (f"  test loss={ev['loss']:.5f} "
+                         f"hard={ev['hard']:.4f}")
             line += f"  [{dt:.1f}s]"
             if improved:
                 line += "  <"
@@ -179,11 +209,13 @@ def main() -> int:
             log.append({"epoch": epoch, "dt_s": dt, "train": tr, "test": ev})
 
             if improved:
-                best_metric = ref["loss"]
+                best_metric = current
                 torch.save({
                     "model": model.state_dict(),
                     "epoch": epoch,
-                    "best_loss": best_metric,
+                    "best_metric": best_metric,
+                    "best_metric_name": best_metric_name,
+                    f"best_{best_metric_name}": best_metric,
                     "source": cfg.source,
                     "outline": cfg.outline,
                     "in_channels": cfg.in_channels,
@@ -193,7 +225,9 @@ def main() -> int:
                 torch.save({
                     "model": model.state_dict(),
                     "epoch": epoch,
-                    "best_loss": best_metric,
+                    "best_metric": best_metric,
+                    "best_metric_name": best_metric_name,
+                    f"best_{best_metric_name}": best_metric,
                     "source": cfg.source,
                     "outline": cfg.outline,
                     "in_channels": cfg.in_channels,
@@ -204,7 +238,9 @@ def main() -> int:
         torch.save({
             "model": model.state_dict(),
             "epoch": epoch,
-            "best_loss": best_metric,
+            "best_metric": best_metric,
+            "best_metric_name": best_metric_name,
+            f"best_{best_metric_name}": best_metric,
             "source": cfg.source,
             "outline": cfg.outline,
             "in_channels": cfg.in_channels,
