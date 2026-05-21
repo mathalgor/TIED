@@ -112,7 +112,7 @@ Useful options:
 | `--crop-size`  | 352        | random crop size; `0` disables (full image, batch=1) |
 | `--splits`     | real aug   | which `train/source/<split>` folders to use |
 | `--tolerance`  | (from toml)| override `[loss].tolerance` for this run (only `teed` loss uses it) |
-| `--loss`       | `auto`     | `auto`, `teed`, `soft_jaccard`, `soft_bce`, `soft_mse`. See the table above. |
+| `--loss`       | `auto`     | `auto`, `teed`, `soft_jaccard`, `soft_bce`. See the table above. |
 | `--hard-threshold` | 0.5    | binarisation threshold for the hard metric. Lower (e.g. 0.2) when using a tonal loss whose edge predictions sit well below 0.5. |
 | `--best-metric`| `auto`     | `loss`, `hard`, or `auto` (= `hard` when outline=mono, `loss` when outline=gray). `hard` = MCED-style wrong/union after binarising sigmoid(pred) and target at 0.5 |
 | `--rollback-on-plateau` | off | reload the in-memory best snapshot on a plateau, re-init Adam, bump RNG seed, retry |
@@ -135,7 +135,6 @@ Loss is selectable via `--loss` and auto-routed by default:
 | `teed`          | default for `outline=mono`   | no (binary GT)| yes (`cats_loss` radius) | `bdcn_loss2` on all 4 heads + `cats_loss` on fused |
 | `soft_jaccard`  | default for `outline=gray`   | no (saturates)| ignored      | `1 - p·t / (p+t-p·t)` on fused head; sharpest edges but pushes p→1 anywhere t>0 |
 | `soft_bce`      | opt-in for tonal gray output | **yes**       | ignored      | class-balanced BCE-with-logits (`pos_weight = sum(1-t)/sum(t)`); optimum `p = t` pixel-wise |
-| `soft_mse`      | opt-in for tonal gray output | **yes**       | ignored      | class-balanced MSE between `sigmoid(p)` and `t`; per-pixel weight ramps 1 → `pos_weight` at `t=1` |
 
 Auto-routing:
 - `outline = "mono"` → `teed` (binary target, TEED loss assumes binary GT).

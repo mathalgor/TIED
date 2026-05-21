@@ -104,19 +104,6 @@ def soft_bce_loss(logits: torch.Tensor, targets: torch.Tensor
         logits, t, pos_weight=_pos_weight(t), reduction="mean")
 
 
-def soft_mse_loss(logits: torch.Tensor, targets: torch.Tensor
-                  ) -> torch.Tensor:
-    """Class-balanced MSE between sigmoid(logits) and float targets.
-    Background pixels keep weight 1; per-pixel weight ramps up to the
-    pos_weight at t=1, so positives dominate the gradient on outlines
-    with overwhelmingly dark backgrounds."""
-    t = targets.float()
-    pw = _pos_weight(t)
-    weight = 1.0 + (pw - 1.0) * t
-    err = (torch.sigmoid(logits) - t) ** 2
-    return (err * weight).mean()
-
-
 def soft_jaccard_loss(logits: torch.Tensor, targets: torch.Tensor,
                       smooth: float = 1.0) -> torch.Tensor:
     """Differentiable soft IoU distance: ``1 - sum(p*t) / sum(p + t - p*t)``.
@@ -135,7 +122,7 @@ def soft_jaccard_loss(logits: torch.Tensor, targets: torch.Tensor,
     return (1.0 - iou).mean()
 
 
-LOSS_KINDS = ("teed", "soft_jaccard", "soft_bce", "soft_mse")
+LOSS_KINDS = ("teed", "soft_jaccard", "soft_bce")
 
 
 def resolve_loss(kind: str, outline_mode: str) -> str:
@@ -155,8 +142,6 @@ def compute_loss(kind: str, preds, target, radius: int = 4):
         return soft_jaccard_loss(preds[-1], target)
     if kind == "soft_bce":
         return soft_bce_loss(preds[-1], target)
-    if kind == "soft_mse":
-        return soft_mse_loss(preds[-1], target)
     raise ValueError(f"unknown loss kind: {kind!r}")
 
 
