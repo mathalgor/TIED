@@ -1,0 +1,29 @@
+# TIED local config. Copy this file to `tied.toml` and edit. `tied.toml`
+# is git-ignored — each developer keeps their own. All TIED CLIs
+# (tied-augment, tied-train, tied-infer) read this file from the nearest
+# `tied.toml` walking up from the cwd.
+
+[dataset]
+# Absolute path to the dataset root. Expected layout:
+#   <root>/train/source/{real,aug}/<stem>.<ext>
+#   <root>/train/outline/{real,aug}/<stem>.<ext>
+#   <root>/test/source/<stem>.<ext>
+#   <root>/test/outline/<stem>.<ext>
+root = "/absolute/path/to/your/tied-data"
+
+# Source channels: "rgb" (3-ch input) or "gray" (1-ch input). Picks the
+# corresponding TED variant in tied-train / tied-infer.
+source = "rgb"
+
+# Outline encoding (different from MCED, closer to TEED — edge is bright
+# on dark background):
+#   "mono" — white (255) on black (0); binarised at 128 in the loader.
+#   "gray" — gray on black; kept as float in [0, 1] (soft target).
+outline = "mono"
+
+[loss]
+# Radius (in pixels) of the cats_loss tolerance band around target
+# edges. Predictions within this distance of a true edge are not
+# punished. TEED default = 4. Overridable per-run with
+# `tied-train --tolerance N`.
+tolerance = 4

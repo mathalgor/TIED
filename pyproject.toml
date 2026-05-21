@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tied"
+version = "0.0.1"
+description = "TIED — Tiny Image Edge Detector. TEED-style training pipeline with the MCED-style dataset layout (source/outline, real/aug)."
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.24",
+    "opencv-python>=4.8",
+    "torch>=2.0",
+    "tomli>=2.0; python_version < '3.11'",
+]
+
+[project.scripts]
+tied-augment = "tied.cli.augment:main"
+tied-train   = "tied.cli.train:main"
+tied-infer   = "tied.cli.infer:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

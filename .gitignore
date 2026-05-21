@@ -216,3 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# TIED
+tied.toml
+ckpt*/
+outlines*/
+*.pt
+
