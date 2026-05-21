@@ -31,7 +31,7 @@ from torch.utils.data import DataLoader
 
 from tied.config import load_config
 from tied.dataset import TiedDataset
-from tied.loss import hard_pixel_counts, teed_total_loss
+from tied.loss import LOSS_KINDS, compute_loss, hard_pixel_counts, resolve_loss
 from tied.model import TED, count_parameters
 
 
@@ -46,7 +46,8 @@ def _next_patience(p: int) -> int:
 
 def _epoch(model: TED, loader: DataLoader, device: str,
            opt: torch.optim.Optimizer | None,
-           radius: int) -> dict:
+           radius: int, loss_kind: str,
+           hard_threshold: float = 0.5) -> dict:
     is_train = opt is not None
     model.train(is_train)
     loss_sum = 0.0
@@ -58,14 +59,14 @@ def _epoch(model: TED, loader: DataLoader, device: str,
             x = batch["source"].to(device, non_blocking=True)
             y = batch["outline"].to(device, non_blocking=True)
             preds = model(x)
-            loss = teed_total_loss(preds, y, radius=radius)
+            loss = compute_loss(loss_kind, preds, y, radius=radius)
             if is_train:
                 opt.zero_grad()
                 loss.backward()
                 opt.step()
             loss_sum += float(loss.item())
             n += 1
-            hc = hard_pixel_counts(preds[-1], y)
+            hc = hard_pixel_counts(preds[-1], y, threshold=hard_threshold)
             n_wrong += hc["wrong_px"]
             n_union += hc["union_px"]
             n_total += hc["total_px"]
@@ -102,6 +103,22 @@ def main() -> int:
     ap.add_argument("--save-every", type=int, default=5)
     ap.add_argument("--resume", type=Path, default=None,
                     help="continue training from a .pt checkpoint")
+    ap.add_argument("--hard-threshold", type=float, default=0.5,
+                    help="binarisation threshold for the hard metric "
+                         "(default 0.5). Lower it (e.g. 0.2) for tonal "
+                         "losses where edge predictions sit well below "
+                         "0.5 and would otherwise all be counted wrong.")
+    ap.add_argument("--loss", choices=("auto",) + LOSS_KINDS,
+                    default="auto",
+                    help="loss function. 'auto' (default) picks 'teed' "
+                         "for outline=mono and 'soft_jaccard' for "
+                         "outline=gray. Tonal alternatives that preserve "
+                         "intensity in gray outputs: 'soft_bce' (BCE "
+                         "with float targets, optimum p=t) and "
+                         "'soft_mse'. 'teed' uses all 4 multi-scale "
+                         "heads with cats_loss tolerance; the soft "
+                         "losses operate on the fused output only and "
+                         "ignore --tolerance.")
     ap.add_argument("--best-metric", choices=["auto", "loss", "hard"],
                     default="auto",
                     help="criterion for best.pt: 'loss' (TEED total) or "
@@ -153,6 +170,8 @@ def main() -> int:
     if best_metric_name == "auto":
         best_metric_name = "hard" if cfg.outline == "mono" else "loss"
     args.best_metric = best_metric_name
+    loss_kind = resolve_loss(args.loss, cfg.outline)
+    args.loss = loss_kind
     train_root = cfg.root / "train"
     test_root = cfg.root / "test"
     crop = args.crop_size if args.crop_size > 0 else None
@@ -190,7 +209,7 @@ def main() -> int:
     print(f"model: TED in_ch={cfg.in_channels}  "
           f"params={count_parameters(model):,}  device={args.device}  "
           f"lr={args.lr}  tolerance={tolerance}  "
-          f"best_metric={best_metric_name}")
+          f"best_metric={best_metric_name}  loss={loss_kind}")
 
     start_epoch = 1
     best_metric = float("inf")
@@ -249,8 +268,10 @@ def main() -> int:
     try:
         for epoch in range(start_epoch, start_epoch + args.epochs):
             t0 = time.perf_counter()
-            tr = _epoch(model, train_loader, args.device, opt, tolerance)
-            ev = (_epoch(model, test_loader, args.device, None, tolerance)
+            tr = _epoch(model, train_loader, args.device, opt,
+                        tolerance, loss_kind, args.hard_threshold)
+            ev = (_epoch(model, test_loader, args.device, None,
+                         tolerance, loss_kind, args.hard_threshold)
                   if test_loader is not None else None)
             dt = time.perf_counter() - t0
 
@@ -288,6 +309,7 @@ def main() -> int:
                     "source": cfg.source,
                     "outline": cfg.outline,
                     "in_channels": cfg.in_channels,
+                    "loss_kind": loss_kind,
                     "args": vars(args),
                 }, args.out_dir / "best.pt")
             else:
@@ -319,6 +341,7 @@ def main() -> int:
                     "source": cfg.source,
                     "outline": cfg.outline,
                     "in_channels": cfg.in_channels,
+                    "loss_kind": loss_kind,
                     "args": vars(args),
                 }, args.out_dir / "last.pt")
 
@@ -355,6 +378,7 @@ def main() -> int:
             "source": cfg.source,
             "outline": cfg.outline,
             "in_channels": cfg.in_channels,
+            "loss_kind": loss_kind,
             "args": vars(args),
         }, args.out_dir / "last.pt")
     finally:

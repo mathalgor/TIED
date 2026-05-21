@@ -111,7 +111,9 @@ Useful options:
 | `--batch-size` | 8          | train batch (eval is always 1) |
 | `--crop-size`  | 352        | random crop size; `0` disables (full image, batch=1) |
 | `--splits`     | real aug   | which `train/source/<split>` folders to use |
-| `--tolerance`  | (from toml)| override `[loss].tolerance` for this run |
+| `--tolerance`  | (from toml)| override `[loss].tolerance` for this run (only `teed` loss uses it) |
+| `--loss`       | `auto`     | `auto`, `teed`, `soft_jaccard`, `soft_bce`, `soft_mse`. See the table above. |
+| `--hard-threshold` | 0.5    | binarisation threshold for the hard metric. Lower (e.g. 0.2) when using a tonal loss whose edge predictions sit well below 0.5. |
 | `--best-metric`| `auto`     | `loss`, `hard`, or `auto` (= `hard` when outline=mono, `loss` when outline=gray). `hard` = MCED-style wrong/union after binarising sigmoid(pred) and target at 0.5 |
 | `--rollback-on-plateau` | off | reload the in-memory best snapshot on a plateau, re-init Adam, bump RNG seed, retry |
 | `--initial-patience` | 4 | (rollback) epochs without improvement before the first rollback; grows along 4,6,8,12,16,24,32,48,… on every failed rollback |
@@ -126,9 +128,29 @@ Useful options:
 | `--resume`     | —          | continue from a `.pt` checkpoint |
 | `--seed`       | 0          | RNG seed |
 
-Loss: TEED's combined `bdcn_loss2` (on the 3 multi-scale heads + the
-fused head) plus `cats_loss` (with the configured `tolerance` radius)
-on the final fused output.
+Loss is selectable via `--loss` and auto-routed by default:
+
+| kind            | who uses it                  | tonal output? | --tolerance? | notes |
+|---|---|---|---|---|
+| `teed`          | default for `outline=mono`   | no (binary GT)| yes (`cats_loss` radius) | `bdcn_loss2` on all 4 heads + `cats_loss` on fused |
+| `soft_jaccard`  | default for `outline=gray`   | no (saturates)| ignored      | `1 - p·t / (p+t-p·t)` on fused head; sharpest edges but pushes p→1 anywhere t>0 |
+| `soft_bce`      | opt-in for tonal gray output | **yes**       | ignored      | class-balanced BCE-with-logits (`pos_weight = sum(1-t)/sum(t)`); optimum `p = t` pixel-wise |
+| `soft_mse`      | opt-in for tonal gray output | **yes**       | ignored      | class-balanced MSE between `sigmoid(p)` and `t`; per-pixel weight ramps 1 → `pos_weight` at `t=1` |
+
+Auto-routing:
+- `outline = "mono"` → `teed` (binary target, TEED loss assumes binary GT).
+- `outline = "gray"` → `soft_jaccard` (no binarisation; faint edges
+  contribute proportionally). Override with `--loss soft_bce` or
+  `--loss soft_mse` when you want the output to preserve target
+  intensity instead of saturating to 0/1.
+
+Why TEED loss is not auto-picked for `outline=gray`: both `bdcn_loss2`
+and `cats_loss` implicitly binarise the target (`mask > 0`,
+`label != 0`) when computing class balance and the texture/border
+terms, which throws away the soft signal that `outline=gray` carries.
+
+The chosen loss is stored in the checkpoint as `loss_kind` and printed
+in the startup line.
 
 Per-epoch log line shows both `loss` and `hard` for train and (if
 available) test, with a trailing `<` whenever the chosen `--best-metric`
