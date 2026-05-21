@@ -94,12 +94,25 @@ def _pos_weight(targets: torch.Tensor) -> torch.Tensor:
     return (neg / pos).clamp_min(1.0)
 
 
-def soft_bce_loss(logits: torch.Tensor, targets: torch.Tensor
-                  ) -> torch.Tensor:
+def soft_bce_loss(logits: torch.Tensor, targets: torch.Tensor,
+                  radius: int = 0) -> torch.Tensor:
     """Class-balanced BCE between sigmoid(logits) and float targets.
+
     Tonal: the per-pixel optimum is ``p == t``, but the class weight
-    keeps faint edges from being drowned by the dark background."""
+    keeps faint edges from being drowned by the dark background.
+
+    ``radius > 0`` enables a spatial tolerance band: the target is
+    max-pooled by a (2r+1) kernel before BCE, so a prediction within
+    ``r`` pixels of a true edge is no longer punished as a false
+    positive. Max-pool preserves intensity, so the tonal property is
+    kept — a faint gray line dilates to a faint gray band of the same
+    intensity. Trade-off: predicted lines also become up to ``r``
+    pixels thicker because the model is rewarded for matching the band.
+    """
     t = targets.float()
+    if radius > 0:
+        k = 2 * radius + 1
+        t = F.max_pool2d(t, kernel_size=k, stride=1, padding=radius)
     return F.binary_cross_entropy_with_logits(
         logits, t, pos_weight=_pos_weight(t), reduction="mean")
 
@@ -141,7 +154,7 @@ def compute_loss(kind: str, preds, target, radius: int = 4):
     if kind == "soft_jaccard":
         return soft_jaccard_loss(preds[-1], target)
     if kind == "soft_bce":
-        return soft_bce_loss(preds[-1], target)
+        return soft_bce_loss(preds[-1], target, radius=radius)
     raise ValueError(f"unknown loss kind: {kind!r}")
 
 

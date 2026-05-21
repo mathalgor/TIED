@@ -91,6 +91,11 @@ def main() -> int:
                     default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--splits", nargs="+", default=["real", "aug"],
                     choices=["real", "aug"], help="train splits to use")
+    ap.add_argument("--no-aug", action="store_true",
+                    help="shortcut for --splits real (skip the "
+                         "augmented split — faster epochs, more "
+                         "passes through the same data; useful for "
+                         "quick iteration / loss experiments)")
     ap.add_argument("--crop-size", type=int, default=352,
                     help="random crop size for training (default 352); "
                          "0 disables cropping (full image, batch must be 1)")
@@ -159,6 +164,12 @@ def main() -> int:
         print("--crop-size=0 requires --batch-size=1; forcing batch_size=1",
               file=sys.stderr)
         args.batch_size = 1
+
+    if args.no_aug:
+        if args.splits != ["real", "aug"] and args.splits != ["real"]:
+            ap.error("--no-aug conflicts with --splits "
+                     f"{' '.join(args.splits)}")
+        args.splits = ["real"]
 
     torch.manual_seed(args.seed)
     args.out_dir.mkdir(parents=True, exist_ok=True)

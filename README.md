@@ -111,7 +111,8 @@ Useful options:
 | `--batch-size` | 8          | train batch (eval is always 1) |
 | `--crop-size`  | 352        | random crop size; `0` disables (full image, batch=1) |
 | `--splits`     | real aug   | which `train/source/<split>` folders to use |
-| `--tolerance`  | (from toml)| override `[loss].tolerance` for this run (only `teed` loss uses it) |
+| `--no-aug`     | off        | shortcut for `--splits real` — skip the augmented set for quick iteration |
+| `--tolerance`  | (from toml)| spatial tolerance in pixels. `teed`: radius of the `cats_loss` bdr/texture neighbourhood. `soft_bce`: target is max-pooled by 2r+1 before BCE — predictions within `r` px of a true edge are not punished as FPs (lines get up to `r` px thicker). `soft_jaccard`: ignored. |
 | `--loss`       | `auto`     | `auto`, `teed`, `soft_jaccard`, `soft_bce`. See the table above. |
 | `--hard-threshold` | 0.5    | binarisation threshold for the hard metric. Lower (e.g. 0.2) when using a tonal loss whose edge predictions sit well below 0.5. |
 | `--best-metric`| `auto`     | `loss`, `hard`, or `auto` (= `hard` when outline=mono, `loss` when outline=gray). `hard` = MCED-style wrong/union after binarising sigmoid(pred) and target at 0.5 |
@@ -134,7 +135,7 @@ Loss is selectable via `--loss` and auto-routed by default:
 |---|---|---|---|---|
 | `teed`          | default for `outline=mono`   | no (binary GT)| yes (`cats_loss` radius) | `bdcn_loss2` on all 4 heads + `cats_loss` on fused |
 | `soft_jaccard`  | default for `outline=gray`   | no (saturates)| ignored      | `1 - p·t / (p+t-p·t)` on fused head; sharpest edges but pushes p→1 anywhere t>0 |
-| `soft_bce`      | opt-in for tonal gray output | **yes**       | ignored      | class-balanced BCE-with-logits (`pos_weight = sum(1-t)/sum(t)`); optimum `p = t` pixel-wise |
+| `soft_bce`      | opt-in for tonal gray output | **yes**       | **yes** (max-pools target by 2r+1; tonal-preserving) | class-balanced BCE-with-logits (`pos_weight = sum(1-t)/sum(t)`); optimum `p = t` pixel-wise; at `tolerance=0` it is strictly per-pixel |
 
 Auto-routing:
 - `outline = "mono"` → `teed` (binary target, TEED loss assumes binary GT).
