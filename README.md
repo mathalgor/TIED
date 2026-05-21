@@ -113,6 +113,13 @@ Useful options:
 | `--splits`     | real aug   | which `train/source/<split>` folders to use |
 | `--tolerance`  | (from toml)| override `[loss].tolerance` for this run |
 | `--best-metric`| `auto`     | `loss`, `hard`, or `auto` (= `hard` when outline=mono, `loss` when outline=gray). `hard` = MCED-style wrong/union after binarising sigmoid(pred) and target at 0.5 |
+| `--rollback-on-plateau` | off | reload the in-memory best snapshot on a plateau, re-init Adam, bump RNG seed, retry |
+| `--initial-patience` | 4 | (rollback) epochs without improvement before the first rollback; grows along 4,6,8,12,16,24,32,48,… on every failed rollback |
+| `--max-rollbacks` | 20 | (rollback) hard cap on rollbacks per run |
+| `--lr-adapt`   | off        | per-epoch LR shrink on no-improve, grow on improve (capped at `--lr` and floored at `--lr-min`) |
+| `--lr-shrink`  | 0.9        | (lr-adapt) per-epoch shrink factor |
+| `--lr-grow`    | 1.2        | (lr-adapt) per-epoch grow factor |
+| `--lr-min`     | lr × 0.01  | (lr-adapt) lower bound for LR |
 | `--device`     | auto       | `cuda` if available, else `cpu` |
 | `--num-workers`| 4          | DataLoader workers |
 | `--save-every` | 5          | overwrite `last.pt` every N epochs |
@@ -154,20 +161,24 @@ tied-train --out-dir ckpt --epochs 20 --resume ckpt/best.pt
 ### `tied-infer` — inference
 
 ```bash
-tied-infer --ckpt ckpt/best.pt --out-dir outlines
+tied-infer --ckpt ckpt/best.pt --input data --out-dir outlines
 ```
 
-By default infers on `<dataset.root>/test/source` from `tied.toml`. Use
-`--input <dir>` to point at any folder of images instead. Output PNGs
-are sized to match the input.
+Runs the checkpoint on every image in `--input` and writes one PNG per
+image into `--out-dir` (sized to match each input). To infer on the
+configured test split, pass it explicitly:
+
+```bash
+tied-infer --ckpt ckpt/best.pt --input "$ROOT/test/source" --out-dir outlines
+```
 
 Options:
 
 | flag | default | meaning |
 |---|---|---|
 | `--ckpt`      | (required)  | path to a `.pt` checkpoint |
+| `--input`     | (required)  | folder of images to run on |
 | `--out-dir`   | (required)  | where to write outline PNGs |
-| `--input`     | test/source | input folder of images |
 | `--mode`      | `auto`      | `mono` (threshold), `gray` (sigmoid×255), or `auto` (use checkpoint's outline mode) |
 | `--threshold` | 0.5         | (`mono`) sigmoid threshold |
 | `--device`    | auto        | `cuda` or `cpu` |
@@ -182,8 +193,8 @@ tied-augment --preset portrait
 # 3. train
 tied-train --out-dir ckpt --epochs 50
 
-# 4. infer on the test split
-tied-infer --ckpt ckpt/best.pt --out-dir outlines
+# 4. infer (point --input at any folder of images, e.g. the test split)
+tied-infer --ckpt ckpt/best.pt --input "$ROOT/test/source" --out-dir outlines
 ```
 
 ## 6. Notes & roadmap

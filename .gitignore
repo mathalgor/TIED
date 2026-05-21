@@ -222,4 +222,7 @@ tied.toml
 ckpt*/
 outlines*/
 *.pt
+*.png
+*.jpg
+*.jpeg
 

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Run a trained TIED checkpoint on a folder of images.
 
-Reads dataset root, source channels and outline encoding from
-``tied.toml``. By default infers on the test set (``<root>/test/source``)
-and writes outlines into ``<out-dir>``. Use ``--input`` to point at an
-arbitrary directory of images instead.
+Reads source channels and outline encoding from ``tied.toml``. The
+input folder is mandatory — pass it via ``--input``. Output PNGs are
+written into ``--out-dir``.
 
 Outputs PNGs sized to match the input (after resize-to-multiple-of-8
 inside the model). Output is bright-on-dark, matching the TIED outline
@@ -47,9 +46,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--ckpt", type=Path, required=True,
                     help="path to a .pt checkpoint (e.g. ckpt/best.pt)")
-    ap.add_argument("--input", type=Path, default=None,
-                    help="folder of images to infer (default: "
-                         "<dataset.root>/test/source from tied.toml)")
+    ap.add_argument("--input", type=Path, required=True,
+                    help="folder of images to infer (required)")
     ap.add_argument("--out-dir", type=Path, required=True,
                     help="where to write outline PNGs")
     ap.add_argument("--device",
@@ -71,9 +69,9 @@ def main() -> int:
     outline_mode = str(ckpt.get("outline", cfg.outline))
     mode = outline_mode if args.mode == "auto" else args.mode
 
-    input_dir = args.input if args.input is not None else cfg.test_source
+    input_dir = args.input
     if not input_dir.is_dir():
-        print(f"input dir does not exist: {input_dir}", file=sys.stderr)
+        print(f"--input dir does not exist: {input_dir}", file=sys.stderr)
         return 1
     args.out_dir.mkdir(parents=True, exist_ok=True)
 

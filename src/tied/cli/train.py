@@ -20,6 +20,7 @@ Saves ``best.pt`` (lowest test loss), ``last.pt`` (last epoch), and
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import sys
 import time
@@ -32,6 +33,15 @@ from tied.config import load_config
 from tied.dataset import TiedDataset
 from tied.loss import hard_pixel_counts, teed_total_loss
 from tied.model import TED, count_parameters
+
+
+def _next_patience(p: int) -> int:
+    """Grow patience along 2,3,4,6,8,12,16,24,32,48,64,...
+    Alternates x1.5 (from a power of two) and x4/3 (to the next power
+    of two). Slower than plain doubling so early plateaux still get
+    quick retries while late ones earn long pauses."""
+    is_pot = p > 0 and (p & (p - 1)) == 0
+    return int(round(p * 1.5)) if is_pot else int(round(p * 4 / 3))
 
 
 def _epoch(model: TED, loader: DataLoader, device: str,
@@ -98,6 +108,34 @@ def main() -> int:
                          "'hard' (MCED-style wrong/union after "
                          "binarising at 0.5). 'auto' (default): hard "
                          "for outline=mono, loss for outline=gray.")
+    ap.add_argument("--rollback-on-plateau", action="store_true",
+                    help="when training stops improving, reload the in-"
+                         "memory best snapshot, re-init Adam, bump the "
+                         "RNG seed and try again. Patience starts at "
+                         "--initial-patience and grows along "
+                         "2,3,4,6,8,12,16,24,32,48,... on every "
+                         "consecutive failed rollback. A real "
+                         "improvement resets patience.")
+    ap.add_argument("--initial-patience", type=int, default=4,
+                    help="(--rollback-on-plateau) epochs without "
+                         "improvement before the first rollback (default 4)")
+    ap.add_argument("--max-rollbacks", type=int, default=20,
+                    help="(--rollback-on-plateau) hard cap on rollbacks "
+                         "per run (default 20)")
+    ap.add_argument("--lr-adapt", action="store_true",
+                    help="adapt LR per epoch: on no improvement multiply "
+                         "by --lr-shrink, on improvement multiply by "
+                         "--lr-grow. Capped at --lr (top) and --lr-min "
+                         "(bottom). Rollback (if enabled) resets LR to "
+                         "the initial value.")
+    ap.add_argument("--lr-shrink", type=float, default=0.9,
+                    help="(--lr-adapt) per-epoch shrink factor on no "
+                         "improvement (default 0.9)")
+    ap.add_argument("--lr-grow", type=float, default=1.2,
+                    help="(--lr-adapt) per-epoch grow factor on "
+                         "improvement (default 1.2)")
+    ap.add_argument("--lr-min", type=float, default=None,
+                    help="(--lr-adapt) lower bound for LR (default lr*0.01)")
     args = ap.parse_args()
 
     if args.crop_size == 0 and args.batch_size != 1:
@@ -183,6 +221,29 @@ def main() -> int:
             except Exception as e:
                 print(f"could not read {existing_log}: {e}", file=sys.stderr)
 
+    # In-memory snapshot of best weights (for rollback on plateau).
+    # If we resumed from best.pt the current model IS that best, so
+    # snapshot it now.
+    best_state = (copy.deepcopy(model.state_dict())
+                  if best_metric != float("inf") else None)
+    # "alt" snapshot: best state OBSERVED since the last new best —
+    # strictly worse than best, but typically from a different
+    # trajectory after a rollback. Reset on every new best.
+    alt_state = None
+    alt_metric = float("inf")
+    no_improve = 0
+    rollback_count = 0          # consecutive failed rollbacks; resets on improvement
+    total_rollbacks = 0         # monotonic, drives the RNG seed
+    patience = max(1, int(args.initial_patience))
+
+    # Per-epoch adaptive LR state.
+    current_lr = args.lr
+    lr_min = args.lr_min if args.lr_min is not None else args.lr * 0.01
+
+    def _set_lr(lr: float) -> None:
+        for pg in opt.param_groups:
+            pg["lr"] = lr
+
     t_start = time.perf_counter()
     epoch = start_epoch - 1
     try:
@@ -203,6 +264,8 @@ def main() -> int:
                 line += (f"  test loss={ev['loss']:.5f} "
                          f"hard={ev['hard']:.4f}")
             line += f"  [{dt:.1f}s]"
+            if args.lr_adapt:
+                line += f"  lr={current_lr:.2e}"
             if improved:
                 line += "  <"
             print(line, flush=True)
@@ -210,6 +273,12 @@ def main() -> int:
 
             if improved:
                 best_metric = current
+                best_state = copy.deepcopy(model.state_dict())
+                alt_state = None
+                alt_metric = float("inf")
+                no_improve = 0
+                rollback_count = 0
+                patience = max(1, int(args.initial_patience))
                 torch.save({
                     "model": model.state_dict(),
                     "epoch": epoch,
@@ -221,6 +290,25 @@ def main() -> int:
                     "in_channels": cfg.in_channels,
                     "args": vars(args),
                 }, args.out_dir / "best.pt")
+            else:
+                no_improve += 1
+                # Best NON-best state since the last improvement — used
+                # as an alternate rollback target.
+                if current == current and current < alt_metric:
+                    alt_metric = current
+                    alt_state = copy.deepcopy(model.state_dict())
+
+            # Adaptive LR: bump on improvement (capped at initial),
+            # shrink on no improvement (floored at lr_min).
+            if args.lr_adapt:
+                if improved:
+                    new_lr = min(current_lr * args.lr_grow, args.lr)
+                else:
+                    new_lr = max(current_lr * args.lr_shrink, lr_min)
+                if new_lr != current_lr:
+                    current_lr = new_lr
+                    _set_lr(current_lr)
+
             if epoch % args.save_every == 0 or epoch == start_epoch + args.epochs - 1:
                 torch.save({
                     "model": model.state_dict(),
@@ -233,6 +321,29 @@ def main() -> int:
                     "in_channels": cfg.in_channels,
                     "args": vars(args),
                 }, args.out_dir / "last.pt")
+
+            # Plateau check: roll back to best (or alt), re-init Adam,
+            # bump RNG seed, grow patience for the next try.
+            if (args.rollback_on_plateau
+                    and best_state is not None
+                    and no_improve >= patience
+                    and rollback_count < args.max_rollbacks):
+                rollback_count += 1
+                total_rollbacks += 1
+                use_alt = (alt_state is not None and rollback_count % 2 == 0)
+                src_state = alt_state if use_alt else best_state
+                src_label = "alt" if use_alt else "best"
+                src_metric = alt_metric if use_alt else best_metric
+                model.load_state_dict(src_state)
+                opt = torch.optim.Adam(model.parameters(), lr=args.lr)
+                current_lr = args.lr
+                new_seed = args.seed + 1000 * total_rollbacks + 37
+                torch.manual_seed(new_seed)
+                no_improve = 0
+                patience = max(patience + 1, _next_patience(patience))
+                print(f"  [rollback #{rollback_count}] reloaded {src_label} "
+                      f"({best_metric_name}={src_metric:.6f}), seed->"
+                      f"{new_seed}, next patience={patience}", flush=True)
     except KeyboardInterrupt:
         print("\ninterrupted — saving last.pt", flush=True)
         torch.save({
