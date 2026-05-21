@@ -135,15 +135,15 @@ def soft_jaccard_loss(logits: torch.Tensor, targets: torch.Tensor,
     return (1.0 - iou).mean()
 
 
-LOSS_KINDS = ("teed", "soft_jaccard", "soft_bce")
+LOSS_KINDS = ("teed", "soft-jaccard", "soft-bce")
 
 
 def resolve_loss(kind: str, outline_mode: str) -> str:
-    """Auto-routing: mono -> teed, gray -> soft_jaccard. Any explicit
+    """Auto-routing: mono -> teed, gray -> soft-jaccard. Any explicit
     kind passes through unchanged."""
     if kind != "auto":
         return kind
-    return "teed" if outline_mode == "mono" else "soft_jaccard"
+    return "teed" if outline_mode == "mono" else "soft-jaccard"
 
 
 def compute_loss(kind: str, preds, target, radius: int = 4):
@@ -151,9 +151,9 @@ def compute_loss(kind: str, preds, target, radius: int = 4):
     heads; the soft losses use only the fused output."""
     if kind == "teed":
         return teed_total_loss(preds, target, radius=radius)
-    if kind == "soft_jaccard":
+    if kind == "soft-jaccard":
         return soft_jaccard_loss(preds[-1], target)
-    if kind == "soft_bce":
+    if kind == "soft-bce":
         return soft_bce_loss(preds[-1], target, radius=radius)
     raise ValueError(f"unknown loss kind: {kind!r}")
 

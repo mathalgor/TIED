@@ -121,10 +121,10 @@ def main() -> int:
     ap.add_argument("--loss", choices=("auto",) + LOSS_KINDS,
                     default="auto",
                     help="loss function. 'auto' (default) picks 'teed' "
-                         "for outline=mono and 'soft_jaccard' for "
+                         "for outline=mono and 'soft-jaccard' for "
                          "outline=gray. Tonal alternative that "
                          "preserves intensity in gray outputs: "
-                         "'soft_bce' (BCE with float targets, optimum "
+                         "'soft-bce' (BCE with float targets, optimum "
                          "p=t). 'teed' uses all 4 multi-scale heads "
                          "with cats_loss tolerance; the soft losses "
                          "operate on the fused output only and ignore "

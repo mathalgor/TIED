@@ -86,20 +86,26 @@ tied-augment --jobs 8 --overwrite
 
 Presets:
 - `full` (default) — 7 D4 transforms (`r90`, `r180`, `r270`, `flipH`,
-  `flipV`, `trans`, `atrans`) plus 20 nearest-neighbour rotations at
-  every 15° (skipping the D4 angles). 27 variants per input.
+  `flipV`, `trans`, `atrans`) plus 20 rotations every 15° (skipping
+  the D4 angles). 27 variants per input.
 - `d4` — only the 7 bit-exact D4 transforms.
 - `portrait` — `flipH` plus ±5°, ±10°, ±15° rotations. 7 variants. No
   vertical flip and no 90/180/270° rotations — suitable for upright
   faces.
 
+15° rotations use **nearest neighbour for both source and outline**.
+Bicubic on the source was tried and empirically lost — the softer
+augmented frames led to undertraining on sharp edges. Nearest also
+keeps source and outline pixel-aligned with no interpolation gap.
+
 Existing files are skipped unless `--overwrite` is passed.
 
 **Output format**: augmented source is written as `.jpg` (quality 90),
 augmented outline as `.png` (lossless — JPEG would destroy hard edges).
-Source `.jpg` files are loaded with a 3×3 Gaussian blur (σ≈0.8) in
-the dataset to wipe out JPEG block artefacts before they leak into
-training; `.png` source files (typically `real/`) are loaded as-is.
+At q=90 JPEG artefacts are small enough that the dataset loads them
+without any post-processing; an optional Gaussian wash on JPG reads
+is available behind `JPEG_BLUR_SIGMA` in `tied/dataset.py` (off by
+default — set sigma > 0 to enable).
 
 ### `tied-train` — training
 
@@ -118,8 +124,8 @@ Useful options:
 | `--crop-size`  | 352        | random crop size; `0` disables (full image, batch=1) |
 | `--splits`     | real aug   | which `train/source/<split>` folders to use |
 | `--no-aug`     | off        | shortcut for `--splits real` — skip the augmented set for quick iteration |
-| `--tolerance`  | (from toml)| spatial tolerance in pixels. `teed`: radius of the `cats_loss` bdr/texture neighbourhood. `soft_bce`: target is max-pooled by 2r+1 before BCE — predictions within `r` px of a true edge are not punished as FPs (lines get up to `r` px thicker). `soft_jaccard`: ignored. |
-| `--loss`       | `auto`     | `auto`, `teed`, `soft_jaccard`, `soft_bce`. See the table above. |
+| `--tolerance`  | (from toml)| spatial tolerance in pixels. `teed`: radius of the `cats_loss` bdr/texture neighbourhood. `soft-bce`: target is max-pooled by 2r+1 before BCE — predictions within `r` px of a true edge are not punished as FPs (lines get up to `r` px thicker). `soft-jaccard`: ignored. |
+| `--loss`       | `auto`     | `auto`, `teed`, `soft-jaccard`, `soft-bce`. See the table above. |
 | `--hard-threshold` | 0.5    | binarisation threshold for the hard metric. Lower (e.g. 0.2) when using a tonal loss whose edge predictions sit well below 0.5. |
 | `--model`      | `ted`      | `ted` (~60k params, default), `tedup` (~180k, wider + deeper dense block), `teddeep` (adds a 4th encoder stage, doubles the receptive field; returns 5 heads). Saved as `model_kind` in the checkpoint, so `tied-infer` reconstructs the right class automatically. |
 | `--best-metric`| `auto`     | `loss`, `hard`, or `auto` (= `hard` when outline=mono, `loss` when outline=gray). `hard` = MCED-style wrong/union after binarising sigmoid(pred) and target at 0.5 |
@@ -141,15 +147,15 @@ Loss is selectable via `--loss` and auto-routed by default:
 | kind            | who uses it                  | tonal output? | --tolerance? | notes |
 |---|---|---|---|---|
 | `teed`          | default for `outline=mono`   | no (binary GT)| yes (`cats_loss` radius) | `bdcn_loss2` on all 4 heads + `cats_loss` on fused |
-| `soft_jaccard`  | default for `outline=gray`   | no (saturates)| ignored      | `1 - p·t / (p+t-p·t)` on fused head; sharpest edges but pushes p→1 anywhere t>0 |
-| `soft_bce`      | opt-in for tonal gray output | **yes**       | **yes** (max-pools target by 2r+1; tonal-preserving) | class-balanced BCE-with-logits (`pos_weight = sum(1-t)/sum(t)`); optimum `p = t` pixel-wise; at `tolerance=0` it is strictly per-pixel |
+| `soft-jaccard`  | default for `outline=gray`   | no (saturates)| ignored      | `1 - p·t / (p+t-p·t)` on fused head; sharpest edges but pushes p→1 anywhere t>0 |
+| `soft-bce`      | opt-in for tonal gray output | **yes**       | **yes** (max-pools target by 2r+1; tonal-preserving) | class-balanced BCE-with-logits (`pos_weight = sum(1-t)/sum(t)`); optimum `p = t` pixel-wise; at `tolerance=0` it is strictly per-pixel |
 
 Auto-routing:
 - `outline = "mono"` → `teed` (binary target, TEED loss assumes binary GT).
-- `outline = "gray"` → `soft_jaccard` (no binarisation; faint edges
-  contribute proportionally). Override with `--loss soft_bce` or
-  `--loss soft_mse` when you want the output to preserve target
-  intensity instead of saturating to 0/1.
+- `outline = "gray"` → `soft-jaccard` (no binarisation; faint edges
+  contribute proportionally). Override with `--loss soft-bce` when
+  you want the output to preserve target intensity instead of
+  saturating to 0/1.
 
 Why TEED loss is not auto-picked for `outline=gray`: both `bdcn_loss2`
 and `cats_loss` implicitly binarise the target (`mask > 0`,

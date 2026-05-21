@@ -2,11 +2,14 @@
 """Generate offline geometric augmentations for source and outline.
 
 For each input file we write the chosen preset's variants. Tags:
-  * D4 \\ {e} — bit-exact: r90, r180, r270, flipH, flipV, trans, atrans
-  * 15-degree nearest-neighbour rotations (skipping the D4 angles).
+  * D4 \\ {e} — bit-exact, no interpolation: r90, r180, r270, flipH,
+    flipV, trans, atrans.
+  * 15-degree nearest-neighbour rotations for both source and outline.
 
-Same transform applied to source and outline keeps pixels aligned, which
-is important because the loss has only a small tolerance band.
+Empirically nearest beats bicubic on the source side too — bicubic
+softens the augmented frames just enough that the network undertrains
+on sharp edges. Both sides therefore use the same nearest rotation,
+keeping source/outline pixel-aligned with no interpolation gap.
 
 Background fill for rotations / warps is 0 (black) — matches the TIED
 convention that edges are bright on dark.
@@ -61,7 +64,7 @@ ROT_ANGLES: list[int] = [a for a in range(15, 360, 15) if a % 90 != 0]
 PORTRAIT_ANGLES: list[int] = [5, 355, 10, 350, 15, 345]
 
 
-def rotate_nearest(img: np.ndarray, angle_deg: float) -> np.ndarray:
+def rotate(img: np.ndarray, angle_deg: float, interp: int) -> np.ndarray:
     h, w = img.shape[:2]
     M = cv2.getRotationMatrix2D((w / 2.0, h / 2.0), angle_deg, 1.0)
     cos_a = abs(M[0, 0]); sin_a = abs(M[0, 1])
@@ -71,38 +74,34 @@ def rotate_nearest(img: np.ndarray, angle_deg: float) -> np.ndarray:
     M[1, 2] += (new_h / 2.0) - (h / 2.0)
     return cv2.warpAffine(
         img, M, (new_w, new_h),
-        flags=cv2.INTER_NEAREST,
+        flags=interp,
         borderMode=cv2.BORDER_CONSTANT,
         borderValue=BG_VALUE,
     )
 
 
-def _build_full() -> dict[str, Callable[[np.ndarray], np.ndarray]]:
+def _build_full(interp: int) -> dict[str, Callable[[np.ndarray], np.ndarray]]:
     ts: dict[str, Callable[[np.ndarray], np.ndarray]] = dict(D4_TRANSFORMS)
     for a in ROT_ANGLES:
-        ts[f"r{a}"] = (lambda ang: (lambda img: rotate_nearest(img, ang)))(a)
+        ts[f"r{a}"] = (lambda ang, ip: (lambda img: rotate(img, ang, ip)))(a, interp)
     return ts
 
 
-def _build_portrait() -> dict[str, Callable[[np.ndarray], np.ndarray]]:
+def _build_portrait(interp: int) -> dict[str, Callable[[np.ndarray], np.ndarray]]:
     ts: dict[str, Callable[[np.ndarray], np.ndarray]] = {
         "flipH": lambda a: np.fliplr(a),
     }
     for a in PORTRAIT_ANGLES:
-        ts[f"r{a}"] = (lambda ang: (lambda img: rotate_nearest(img, ang)))(a)
+        ts[f"r{a}"] = (lambda ang, ip: (lambda img: rotate(img, ang, ip)))(a, interp)
     return ts
 
 
-FULL_TRANSFORMS = _build_full()
-PORTRAIT_TRANSFORMS = _build_portrait()
-
-
-def transforms_for(preset: str) -> dict[str, Callable[[np.ndarray], np.ndarray]]:
+def transforms_for(preset: str, interp: int) -> dict[str, Callable[[np.ndarray], np.ndarray]]:
     if preset == "d4":
-        return D4_TRANSFORMS
+        return D4_TRANSFORMS                # bit-exact, ignores interp
     if preset == "portrait":
-        return PORTRAIT_TRANSFORMS
-    return FULL_TRANSFORMS
+        return _build_portrait(interp)
+    return _build_full(interp)
 
 
 def list_stems(d: Path) -> dict[str, Path]:
@@ -114,14 +113,15 @@ def list_stems(d: Path) -> dict[str, Path]:
 
 
 def _process_one(args_tuple) -> tuple[str, int, int, int, float]:
-    src_path, out_dir, stem, overwrite, preset, color, out_ext = args_tuple
+    (src_path, out_dir, stem, overwrite, preset, color, out_ext,
+     interp) = args_tuple
     t0 = time.perf_counter()
     flag = cv2.IMREAD_COLOR if color else cv2.IMREAD_GRAYSCALE
     img = cv2.imread(src_path, flag)
     if img is None:
         return (stem, 0, 0, 1, (time.perf_counter() - t0) * 1000)
     params = JPG_PARAMS if out_ext in (".jpg", ".jpeg") else PNG_PARAMS
-    transforms = transforms_for(preset)
+    transforms = transforms_for(preset, interp)
     wrote = skipped = failed = 0
     for tag, fn in transforms.items():
         out_path = Path(out_dir) / f"{stem}__{tag}{out_ext}"
@@ -137,17 +137,17 @@ def _process_one(args_tuple) -> tuple[str, int, int, int, float]:
 
 
 def _run_side(label: str, real_dir: Path, aug_dir: Path, overwrite: bool,
-              jobs: int, preset: str, color: bool, out_ext: str
-              ) -> tuple[int, int, int]:
+              jobs: int, preset: str, color: bool, out_ext: str,
+              interp: int) -> tuple[int, int, int]:
     stems = list_stems(real_dir)
     if not stems:
         print(f"[{label}] no source files in {real_dir}", file=sys.stderr)
         return (0, 0, 1)
     aug_dir.mkdir(parents=True, exist_ok=True)
     n = len(stems)
-    n_tx = len(transforms_for(preset))
-    work = [(str(stems[s]), str(aug_dir), s, overwrite, preset, color, out_ext)
-            for s in sorted(stems)]
+    n_tx = len(transforms_for(preset, interp))
+    work = [(str(stems[s]), str(aug_dir), s, overwrite, preset, color,
+             out_ext, interp) for s in sorted(stems)]
 
     wrote = skipped = failed = 0
     t0 = time.perf_counter()
@@ -215,7 +215,7 @@ def main() -> int:
         _, _, f = _run_side(
             "source", cfg.train_source_real, cfg.train_source_aug,
             args.overwrite, args.jobs, args.preset, color=color,
-            out_ext=".jpg")
+            out_ext=".jpg", interp=cv2.INTER_NEAREST)
         overall_fail += f
     if do_outline:
         if not cfg.train_outline_real.is_dir():
@@ -225,7 +225,7 @@ def main() -> int:
         _, _, f = _run_side(
             "outline", cfg.train_outline_real, cfg.train_outline_aug,
             args.overwrite, args.jobs, args.preset, color=False,
-            out_ext=".png")
+            out_ext=".png", interp=cv2.INTER_NEAREST)
         overall_fail += f
 
     return 0 if overall_fail == 0 else 2
