@@ -35,6 +35,7 @@ import numpy as np
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 PNG_PARAMS = [cv2.IMWRITE_PNG_COMPRESSION, 7]
+JPG_PARAMS = [cv2.IMWRITE_JPEG_QUALITY, 90]
 
 BG_VALUE = 0   # dark background — edges in TIED are bright on dark
 
@@ -113,21 +114,22 @@ def list_stems(d: Path) -> dict[str, Path]:
 
 
 def _process_one(args_tuple) -> tuple[str, int, int, int, float]:
-    src_path, out_dir, stem, overwrite, preset, color = args_tuple
+    src_path, out_dir, stem, overwrite, preset, color, out_ext = args_tuple
     t0 = time.perf_counter()
     flag = cv2.IMREAD_COLOR if color else cv2.IMREAD_GRAYSCALE
     img = cv2.imread(src_path, flag)
     if img is None:
         return (stem, 0, 0, 1, (time.perf_counter() - t0) * 1000)
+    params = JPG_PARAMS if out_ext in (".jpg", ".jpeg") else PNG_PARAMS
     transforms = transforms_for(preset)
     wrote = skipped = failed = 0
     for tag, fn in transforms.items():
-        out_path = Path(out_dir) / f"{stem}__{tag}.png"
+        out_path = Path(out_dir) / f"{stem}__{tag}{out_ext}"
         if not overwrite and out_path.exists():
             skipped += 1
             continue
         arr = np.ascontiguousarray(fn(img))
-        if not cv2.imwrite(str(out_path), arr, PNG_PARAMS):
+        if not cv2.imwrite(str(out_path), arr, params):
             failed += 1
             continue
         wrote += 1
@@ -135,7 +137,8 @@ def _process_one(args_tuple) -> tuple[str, int, int, int, float]:
 
 
 def _run_side(label: str, real_dir: Path, aug_dir: Path, overwrite: bool,
-              jobs: int, preset: str, color: bool) -> tuple[int, int, int]:
+              jobs: int, preset: str, color: bool, out_ext: str
+              ) -> tuple[int, int, int]:
     stems = list_stems(real_dir)
     if not stems:
         print(f"[{label}] no source files in {real_dir}", file=sys.stderr)
@@ -143,7 +146,7 @@ def _run_side(label: str, real_dir: Path, aug_dir: Path, overwrite: bool,
     aug_dir.mkdir(parents=True, exist_ok=True)
     n = len(stems)
     n_tx = len(transforms_for(preset))
-    work = [(str(stems[s]), str(aug_dir), s, overwrite, preset, color)
+    work = [(str(stems[s]), str(aug_dir), s, overwrite, preset, color, out_ext)
             for s in sorted(stems)]
 
     wrote = skipped = failed = 0
@@ -211,7 +214,8 @@ def main() -> int:
             return 1
         _, _, f = _run_side(
             "source", cfg.train_source_real, cfg.train_source_aug,
-            args.overwrite, args.jobs, args.preset, color=color)
+            args.overwrite, args.jobs, args.preset, color=color,
+            out_ext=".jpg")
         overall_fail += f
     if do_outline:
         if not cfg.train_outline_real.is_dir():
@@ -220,7 +224,8 @@ def main() -> int:
             return 1
         _, _, f = _run_side(
             "outline", cfg.train_outline_real, cfg.train_outline_aug,
-            args.overwrite, args.jobs, args.preset, color=False)
+            args.overwrite, args.jobs, args.preset, color=False,
+            out_ext=".png")
         overall_fail += f
 
     return 0 if overall_fail == 0 else 2

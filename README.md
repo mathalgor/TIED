@@ -95,6 +95,12 @@ Presets:
 
 Existing files are skipped unless `--overwrite` is passed.
 
+**Output format**: augmented source is written as `.jpg` (quality 90),
+augmented outline as `.png` (lossless — JPEG would destroy hard edges).
+Source `.jpg` files are loaded with a 3×3 Gaussian blur (σ≈0.8) in
+the dataset to wipe out JPEG block artefacts before they leak into
+training; `.png` source files (typically `real/`) are loaded as-is.
+
 ### `tied-train` — training
 
 ```bash

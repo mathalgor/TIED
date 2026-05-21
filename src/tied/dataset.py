@@ -29,6 +29,8 @@ import torch
 from torch.utils.data import Dataset
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+JPEG_EXTS = {".jpg", ".jpeg"}
+JPEG_BLUR_SIGMA = 0.8   # 3x3 Gaussian to wash out JPEG block artefacts
 
 
 def _list_stems(d: Path) -> dict[str, Path]:
@@ -47,11 +49,19 @@ def _read_source(path: Path, source_mode: str) -> np.ndarray:
         if img is None:
             raise RuntimeError(f"cannot read source image: {path}")
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        return img  # (H, W, 3) uint8
-    img = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
-    if img is None:
-        raise RuntimeError(f"cannot read source image: {path}")
-    return img[..., None]  # (H, W, 1) uint8
+    else:
+        img = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            raise RuntimeError(f"cannot read source image: {path}")
+    # JPEG augs (written by tied-augment) carry block artefacts that
+    # the model would learn as fake edges. A small Gaussian wipes them
+    # out without smudging real edges meaningfully (sigma=0.8 ~ 1 px).
+    # PNGs (typically real/) are kept sharp.
+    if path.suffix.lower() in JPEG_EXTS:
+        img = cv2.GaussianBlur(img, (3, 3), JPEG_BLUR_SIGMA)
+    if img.ndim == 2:
+        return img[..., None]  # (H, W, 1) uint8
+    return img  # (H, W, 3) uint8
 
 
 def _read_outline(path: Path, outline_mode: str) -> np.ndarray:
